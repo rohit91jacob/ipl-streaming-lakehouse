@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.ruff_cache
+.pytest_cache
+**/__pycache__
+**/*.pyc
+data
+spark-warehouse
+metastore_db
+tests
+docs
+.env
+*.log

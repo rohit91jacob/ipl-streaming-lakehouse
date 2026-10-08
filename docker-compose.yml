@@ -1,0 +1,118 @@
+# Local stack: single-node Kafka (KRaft) + the lakehouse jobs, all sharing one data volume.
+#
+#   docker compose up -d                                   # kafka, topic init, stream processor
+#   docker compose run --rm batch                          # backfill: ingest -> silver -> gold
+#   docker compose run --rm producer                       # replay a season into Kafka
+#   docker compose --profile ui --profile dashboard up -d  # kafka-ui :8080, dashboard :8501
+name: ipl-lakehouse
+
+x-app: &app
+  image: ipl-streaming-lakehouse:local
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    IPL_DATA_DIR: /data
+    IPL_CHECKPOINT_DIR: /data/_checkpoints
+    IPL_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    IPL_KAFKA_TOPIC: ${IPL_KAFKA_TOPIC:-ipl.deliveries.v1}
+  volumes:
+    - lakehouse:/data
+
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    hostname: kafka
+    environment:
+      CLUSTER_ID: OoWITSmgQ8eqhcz-BNj5JA
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx1g
+    ports:
+      - "9094:9094" # host clients: IPL_KAFKA_BOOTSTRAP_SERVERS=localhost:9094
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic "${IPL_KAFKA_TOPIC:-ipl.deliveries.v1}" --partitions 6 --replication-factor 1
+        --config retention.ms=604800000 --config cleanup.policy=delete
+        && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe
+        --topic "${IPL_KAFKA_TOPIC:-ipl.deliveries.v1}"
+    restart: "no"
+
+  stream:
+    <<: *app
+    command: ["stream"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  producer:
+    <<: *app
+    profiles: ["replay"]
+    command: ["produce", "--season", "${IPL_REPLAY_SEASON:-2025}", "--ensure-ingested"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  batch:
+    <<: *app
+    profiles: ["batch"]
+    command: ["batch"]
+    restart: "no"
+
+  dashboard:
+    <<: *app
+    profiles: ["dashboard"]
+    command: ["dashboard", "--port", "8501"]
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    profiles: ["ui"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ipl-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "8080:8080"
+
+volumes:
+  lakehouse:
+  kafka-data:

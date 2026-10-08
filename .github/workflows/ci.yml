@@ -1,0 +1,160 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Fail if uv.lock is out of date instead of silently re-locking.
+  UV_LOCKED: "1"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: lint, lockfile, secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: uv.lock is in sync with pyproject.toml
+        run: uv lock --check
+      - run: uv sync --only-group dev --no-install-project
+      - name: ruff check
+        run: uv run --no-sync ruff check --output-format=github .
+      - name: ruff format
+        run: uv run --no-sync ruff format --check .
+      - name: gitleaks (full history)
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact --verbose
+
+  unit:
+    name: unit tests (no JVM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest tests/unit -q
+
+  spark:
+    name: spark + delta tests (real fixture matches)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Cache Spark packages (Delta, Kafka connector)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ivy2.5.2
+          key: ivy-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+      - run: uv sync
+      - name: pytest (unit + spark) with coverage
+        run: uv run pytest -m "not integration" --cov --cov-report=term --cov-report=xml --durations=15
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage.xml
+
+  integration:
+    name: kafka integration (service container)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      kafka:
+        image: apache/kafka:4.3.1
+        ports:
+          - 9092:9092
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s --health-timeout 10s --health-retries 12 --health-start-period 20s
+    env:
+      IPL_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ivy2.5.2
+          key: ivy-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+      - run: uv sync
+      - run: uv run pytest -m integration tests/integration -v
+
+  docker:
+    name: docker image + compose smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: ipl-streaming-lakehouse:local
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Compose file is valid
+        run: docker compose config --quiet
+      - name: Start Kafka and create the topic
+        run: |
+          docker compose up -d --wait kafka
+          docker compose run --rm kafka-init
+      - name: Batch backfill on the fixture matches
+        run: |
+          mkdir -p /tmp/smoke
+          (cd tests/fixtures/cricsheet && zip -q /tmp/smoke/ipl_fixtures.zip ./*.json)
+          docker compose run --rm -v /tmp/smoke:/smoke:ro batch batch --archive /smoke/ipl_fixtures.zip --no-register
+          docker compose run --rm batch sql "SELECT season, position, team, points, net_run_rate FROM points_table WHERE season = 2019 ORDER BY position"
+      - name: Replay a match through Kafka and reconcile the live scorecard
+        run: |
+          docker compose run --rm -v "$PWD/tests/fixtures/cricsheet:/fixtures:ro" producer \
+            produce --file /fixtures/1473511.json --speedup 0 --duplicate-every 10
+          docker compose run --rm stream stream --available-now
+          docker compose run --rm stream verify-stream --match-id 1473511 --against gold
+          docker compose run --rm -v "$PWD/tests/fixtures/cricsheet:/fixtures:ro" stream \
+            verify-stream --match-id 1473511 --file /fixtures/1473511.json
+      - name: Compose logs
+        if: failure()
+        run: docker compose logs --no-color | tail -n 300
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
