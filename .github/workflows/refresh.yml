@@ -1,0 +1,127 @@
+name: refresh
+
+# Scheduled data refresh: pull the latest Cricsheet IPL archive, run the batch medallion
+# (ingest -> silver -> DQ -> gold -> DQ), and publish the results site to GitHub Pages.
+# No credentials are needed: Cricsheet is public and Pages uses the built-in GITHUB_TOKEN.
+
+on:
+  schedule:
+    # Twice a week. Cricsheet adds matches within days of play, and two runs a week keep the
+    # cached lake inside the Actions cache's 7-day eviction window.
+    - cron: "0 5 * * 1,4"
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: "Rebuild silver from bronze (and re-download everything if the cache is empty)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+env:
+  UV_LOCKED: "1"
+  PYTHON_VERSION: "3.12"
+  # A fixed path: the lake is cached between runs so ingest stays incremental.
+  IPL_DATA_DIR: /home/runner/ipl-lake
+  IPL_LOG_FORMAT: json
+
+jobs:
+  build:
+    name: refresh lake + build site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Cache Spark packages (Delta)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ivy2.5.2
+          key: ivy-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+      - name: Restore the lake from the previous run
+        id: lake
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.IPL_DATA_DIR }}
+          key: ipl-lake-${{ github.run_id }}
+          restore-keys: ipl-lake-
+      - name: Report lake state
+        run: |
+          if [ -n "${{ steps.lake.outputs.cache-matched-key }}" ]; then
+            echo "restored from: ${{ steps.lake.outputs.cache-matched-key }}"
+            du -sh "$IPL_DATA_DIR"
+          else
+            echo "restored from: nothing (fresh lake; full download and rebuild)"
+          fi
+      - run: uv sync
+      - name: Batch pipeline (exit 3 = data-quality failure)
+        run: uv run ipl batch ${{ inputs.full_refresh && '--full-refresh' || '' }}
+      - name: Save the lake for the next run
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.IPL_DATA_DIR }}
+          key: ipl-lake-${{ github.run_id }}
+      - name: Build the results site
+        run: |
+          uv run ipl report --out site
+          echo "### Results site" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat site/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: publish to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  alert:
+    name: open or update a failure issue
+    needs: [build, deploy]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Scheduled refresh is failing
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or comment on the tracking issue
+        run: |
+          body="The scheduled \`refresh\` run failed: $RUN_URL
+
+          See docs/runbook.md#scheduled-refresh-github-actions. Close this issue once a run is green."
+          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
