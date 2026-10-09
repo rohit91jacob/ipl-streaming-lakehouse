@@ -9,7 +9,8 @@ data-quality failure, `4` reconciliation mismatch.
 
 | Job | Cadence | Command |
 |---|---|---|
-| Batch refresh | Daily during the season (Cricsheet usually publishes a match within a day or two); weekly off-season | `ipl batch` |
+| Batch refresh + results site | Mondays and Thursdays 05:00 UTC on GitHub Actions ([`refresh.yml`](../.github/workflows/refresh.yml)); run it daily in season if you self-host | `ipl batch` then `ipl report --out site` |
+| Keep-alive | 1st and 15th of each month ([`keepalive.yml`](../.github/workflows/keepalive.yml)) | re-enables the scheduled workflows |
 | Stream processor | Long-running service (`restart: unless-stopped` in compose) | `ipl stream` |
 | Replay / demo feed | On demand | `ipl produce --season 2025` |
 
@@ -17,6 +18,35 @@ data-quality failure, `4` reconciliation mismatch.
 step), compares sha256 checksums per match, and processes only new or changed matches into
 silver. You can schedule it with cron, Airflow, Dagster or a Kubernetes `CronJob`. The command
 returns a non-zero exit code on any failure.
+
+## Scheduled refresh (GitHub Actions)
+
+`refresh.yml` restores the lake from the Actions cache, runs `ipl batch`, saves the lake, builds
+the site and deploys it to https://rohit91jacob.github.io/ipl-streaming-lakehouse/. It needs no
+secrets.
+
+* **A scheduled run failed.** The `alert` job opens a `Scheduled refresh is failing` issue with
+  the run link, or comments on the open one. Open the run and find the failing step:
+  * `Batch pipeline` exiting with code 3 is a data-quality failure; follow
+    [Data-quality failures](#data-quality-failures-exit-code-3). A new venue spelling (a DQ
+    warning) doesn't fail the run.
+  * A download error (HTTP 5xx or a timeout) is usually Cricsheet being briefly unavailable. Re-run
+    with **Run workflow** in the Actions tab.
+  * `deploy` failing means GitHub Pages: check Settings → Pages → Source is "GitHub Actions".
+
+  Close the issue once a run is green. Failed runs never overwrite the cached lake or the site,
+  because the save and deploy steps only run after a successful batch.
+* **The log says "restored from: nothing".** The cache was evicted. That run downloads the full
+  archive and rebuilds every layer (about 10 minutes); the output is the same as an incremental
+  run.
+* **Force a rebuild.** Run workflow with `full_refresh` ticked. That rebuilds silver from
+  bronze; to start from an empty lake as well, delete the `ipl-lake-*` caches under Actions →
+  Caches first.
+* **The schedules stopped.** GitHub disables scheduled workflows after 60 days without
+  repository activity. `keepalive.yml` re-enables them twice a month. If they're disabled
+  anyway (for example, keep-alive itself was switched off), enable both in the Actions tab, or
+  run `keepalive.yml` manually.
+* **Credentials.** None to rotate. The workflows only use the per-run `GITHUB_TOKEN`.
 
 ## Backfill and reprocessing
 

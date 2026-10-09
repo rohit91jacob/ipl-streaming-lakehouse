@@ -1,6 +1,8 @@
 # IPL streaming lakehouse
 
 [![ci](https://github.com/rohit91jacob/ipl-streaming-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/rohit91jacob/ipl-streaming-lakehouse/actions/workflows/ci.yml)
+[![refresh](https://github.com/rohit91jacob/ipl-streaming-lakehouse/actions/workflows/refresh.yml/badge.svg)](https://github.com/rohit91jacob/ipl-streaming-lakehouse/actions/workflows/refresh.yml)
+[![Live results](https://img.shields.io/badge/live%20results-GitHub%20Pages-0b5cad.svg)](https://rohit91jacob.github.io/ipl-streaming-lakehouse/)
 [![License: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](LICENSE)
 [![Data: ODC-By](https://img.shields.io/badge/data-ODC--By%201.0-green.svg)](DATA_LICENSE.md)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
@@ -25,6 +27,10 @@ every IPL match since 2008: about 1,250 matches and about 300,000 deliveries fro
   [verification](docs/verification.md). Kohli's 973 runs in 2016 come out exactly. The streaming
   scorecard of the 2025 final reconciles with the batch scorecard, even after a SIGKILL mid-match
   and a full duplicate replay.
+* **Live results.** A scheduled GitHub Actions job refreshes the lake from Cricsheet twice a
+  week and publishes **[rohit91jacob.github.io/ipl-streaming-lakehouse](https://rohit91jacob.github.io/ipl-streaming-lakehouse/)**:
+  the latest points table with NRR, Orange and Purple Cap top 10, recent results, all-time
+  leaders and champions, plus a page per season. No credentials are involved.
 
 ## Architecture
 
@@ -229,8 +235,11 @@ ipl gold                                                ipl stream [--available-
 ipl dq [--layer silver|gold|all]                        ipl verify-stream --match-id ID [--against source|gold]
 ipl batch [--full-refresh] [--skip-ingest] [--archive ZIP] [--no-register]
 ipl sql "SELECT …" | --list                             ipl dashboard [--port 8501]
-ipl stream-reset [--yes]
+ipl report [--out site]                                 ipl stream-reset [--yes]
 ```
+
+`ipl report` writes the static results site (plain HTML and CSS, no JavaScript or external
+assets) from the gold tables through delta-rs, so it needs no JVM.
 
 Exit codes: `0` ok · `1` failure · `2` usage or configuration · `3` data-quality failure · `4`
 reconciliation mismatch. `make help` lists convenience targets that wrap these commands.
@@ -238,7 +247,7 @@ reconciliation mismatch. `make help` lists convenience targets that wrap these c
 ## Testing and CI
 
 ```bash
-uv run pytest tests/unit                  # 74 tests, under a minute, no JVM
+uv run pytest tests/unit                  # 81 tests, under a minute, no JVM
 uv run pytest tests/spark                 # 22 Spark/Delta tests on six real matches (needs Java)
 IPL_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 uv run pytest -m integration tests/integration
 ```
@@ -259,7 +268,15 @@ a washed-out 5-over no result, a side "all out" for 9 with a player absent hurt,
   ball in an over stops the query;
 * a real Kafka broker round trip is effectively-once.
 
-[`ci.yml`](.github/workflows/ci.yml) runs on every push and PR. All actions are pinned by SHA.
+Three workflows run in GitHub Actions. All actions are pinned by SHA.
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | every push and PR | The jobs below |
+| [`refresh.yml`](.github/workflows/refresh.yml) | Mondays and Thursdays 05:00 UTC, or **Run workflow** | Restores the cached lake, runs `ipl batch` against live Cricsheet (data-quality gates fail the run), saves the lake, builds the site with `ipl report` and deploys it to GitHub Pages. A failed scheduled run opens or updates a `Scheduled refresh is failing` issue. |
+| [`keepalive.yml`](.github/workflows/keepalive.yml) | 1st and 15th of each month | Re-enables the scheduled workflows through the API so GitHub's 60-day inactivity rule never switches them off. It makes no commits. |
+
+`ci.yml` jobs:
 
 | Job | What it does |
 |---|---|
@@ -274,9 +291,15 @@ the repository current and clean.
 
 ## Operations
 
-* **Scheduling.** Run `ipl batch` daily in season (cron, Airflow, Dagster or a k8s CronJob; the
-  exit code is the contract). `ipl stream` is a long-running service; compose restarts it
+* **Scheduling and freshness.** `refresh.yml` runs `ipl batch` on GitHub Actions every Monday
+  and Thursday and republishes the results site. The site header shows the date of the latest
+  match in the data and when it was generated; `summary.json` has the same metadata for
+  monitoring. Elsewhere, run `ipl batch` from cron, Airflow, Dagster or a k8s CronJob (the exit
+  code is the contract). `ipl stream` is a long-running service; compose restarts it
   automatically.
+* **Credentials.** None. Cricsheet is public, and the workflows use only the built-in,
+  per-run `GITHUB_TOKEN` with minimal `permissions:` (Pages, issues, re-enabling workflows), so
+  there are no secrets to rotate and nothing expires.
 * **Backfill and reprocessing.** Bronze is immutable and versioned, so it is always safe to run
   `ipl silver --full-refresh && ipl gold`. Corrected Cricsheet files are picked up automatically
   as new versions.
@@ -284,7 +307,7 @@ the repository current and clean.
   with throughput, latency, watermark and state size. `ops/dq_results`, `ops/stream_dlq` and
   `gold/stream_activity` back the dashboard's *Pipeline health* tab.
 * **Runbook.** [docs/runbook.md](docs/runbook.md) covers backfills, DQ failures, DLQ triage,
-  streaming DQ stops, checkpoint resets and Kafka retention gaps.
+  streaming DQ stops, checkpoint resets, Kafka retention gaps, and failed scheduled refreshes.
 
 ## Project structure
 
@@ -296,6 +319,7 @@ the repository current and clean.
 │   ├── cricsheet.py            # pure-Python reader for Cricsheet JSON
 │   ├── spark.py                # SparkSession factory (Delta, Kafka, jar baking)
 │   ├── query.py                # `ipl sql` via delta-rs/DataFusion
+│   ├── report.py               # `ipl report`: static results site (GitHub Pages)
 │   ├── logs.py                 # JSON logging
 │   ├── ingest/                 # download, content-addressed landing, manifest
 │   ├── batch/                  # schemas, silver, gold, Delta write helpers, pipeline
@@ -311,7 +335,7 @@ the repository current and clean.
 ├── docs/                       # data dictionary, streaming semantics, runbook, verification
 ├── docker/Dockerfile           # one image, every role
 ├── docker-compose.yml          # kafka, kafka-init, stream, producer, batch, dashboard, kafka-ui
-├── .github/                    # CI workflow, Dependabot
+├── .github/                    # ci, refresh (schedule + Pages) and keepalive workflows; Dependabot
 ├── Makefile · .env.example · .pre-commit-config.yaml · pyproject.toml · uv.lock
 └── LICENSE (MIT, code) · DATA_LICENSE.md (Cricsheet, ODC-By)
 ```
@@ -353,6 +377,9 @@ the repository current and clean.
   `venues.csv`. Cricsheet's new Venue Register (Oct 2026) could replace this file.
 * **Storage.** Paths are POSIX (local disk or shared filesystem). The ingest step and `ipl sql`
   do not yet support object stores.
+* **Lake persistence on GitHub Actions.** The refresh keeps the lake in the Actions cache. If
+  the cache is evicted (7 days unused, or the 10 GB repository limit), the next run rebuilds the
+  whole lake from Cricsheet in about 10 minutes. Results are identical; only run time grows.
 * **Docker Compose** is validated in CI only. The author's machine runs Spark and Kafka natively
   in WSL.
 * **Performance.** On a busy laptop, the first micro-batch takes 30–60 s (JVM warm-up and
