@@ -8,7 +8,7 @@ SEASON ?= 2025
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format test test-unit test-spark test-integration batch silver gold dq \
-        topics produce stream stream-once verify sql dashboard up down logs compose-batch \
+        topics produce stream stream-once verify sql report dashboard up down logs compose-batch \
         compose-replay compose-verify clean
 
 help: ## Show this help
@@ -66,6 +66,9 @@ verify: ## Compare live_scorecard for MATCH with the batch view
 
 sql: ## Example ad-hoc query: SEASON's points table
 	$(UV) run ipl sql "SELECT position, team, played, won, lost, no_result, points, net_run_rate FROM points_table WHERE season = $(SEASON) ORDER BY position"
+
+report: ## Write the static results site to ./site (open site/index.html)
+	$(UV) run ipl report --out site
 
 dashboard: ## Streamlit dashboard on :8501
 	$(UV) run ipl dashboard

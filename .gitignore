@@ -34,3 +34,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Generated results site (published by refresh.yml)
+site/

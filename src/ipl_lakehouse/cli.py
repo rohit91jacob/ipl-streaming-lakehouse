@@ -209,6 +209,13 @@ def cmd_sql(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK
 
 
+def cmd_report(args: argparse.Namespace, settings: Settings) -> int:
+    from ipl_lakehouse.report import build_site
+
+    print(json.dumps(build_site(args.out, settings), indent=2))
+    return EXIT_OK
+
+
 def cmd_dashboard(args: argparse.Namespace, settings: Settings) -> int:
     import subprocess
 
@@ -329,6 +336,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=("table", "json"), default="table")
     p.add_argument("--max-rows", type=int, default=50)
     p.set_defaults(func=cmd_sql)
+
+    p = sub.add_parser(
+        "report", help="write the static results site (HTML) from the gold tables (no JVM)"
+    )
+    p.add_argument("--out", type=Path, default=Path("site"), help="output directory")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser(
         "dashboard", help="Streamlit dashboard over the gold tables (needs [dashboard])"
