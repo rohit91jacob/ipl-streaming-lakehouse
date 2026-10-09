@@ -379,7 +379,7 @@ the repository current and clean.
   do not yet support object stores.
 * **Lake persistence on GitHub Actions.** The refresh keeps the lake in the Actions cache. If
   the cache is evicted (7 days unused, or the 10 GB repository limit), the next run rebuilds the
-  whole lake from Cricsheet in about 10 minutes. Results are identical; only run time grows.
+  whole lake from Cricsheet in about 2 minutes on a GitHub runner. Results are identical; only run time grows.
 * **Docker Compose** is validated in CI only. The author's machine runs Spark and Kafka natively
   in WSL.
 * **Performance.** On a busy laptop, the first micro-batch takes 30–60 s (JVM warm-up and

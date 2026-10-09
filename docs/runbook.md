@@ -37,7 +37,7 @@ secrets.
   Close the issue once a run is green. Failed runs never overwrite the cached lake or the site,
   because the save and deploy steps only run after a successful batch.
 * **The log says "restored from: nothing".** The cache was evicted. That run downloads the full
-  archive and rebuilds every layer (about 10 minutes); the output is the same as an incremental
+  archive and rebuilds every layer (about 2 minutes on a GitHub runner); the output is the same as an incremental
   run.
 * **Force a rebuild.** Run workflow with `full_refresh` ticked. That rebuilds silver from
   bronze; to start from an empty lake as well, delete the `ipl-lake-*` caches under Actions →
