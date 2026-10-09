@@ -9,7 +9,7 @@ data-quality failure, `4` reconciliation mismatch.
 
 | Job | Cadence | Command |
 |---|---|---|
-| Batch refresh + results site | Mondays and Thursdays 05:00 UTC on GitHub Actions ([`refresh.yml`](../.github/workflows/refresh.yml)); run it daily in season if you self-host | `ipl batch` then `ipl report --out site` |
+| Batch refresh + results site | Daily 05:00 UTC on GitHub Actions ([`refresh.yml`](../.github/workflows/refresh.yml)); run it daily in season if you self-host | `ipl batch` then `ipl report --out site` |
 | Keep-alive | 1st and 15th of each month ([`keepalive.yml`](../.github/workflows/keepalive.yml)) | re-enables the scheduled workflows |
 | Stream processor | Long-running service (`restart: unless-stopped` in compose) | `ipl stream` |
 | Replay / demo feed | On demand | `ipl produce --season 2025` |

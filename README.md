@@ -27,8 +27,8 @@ every IPL match since 2008: about 1,250 matches and about 300,000 deliveries fro
   [verification](docs/verification.md). Kohli's 973 runs in 2016 come out exactly. The streaming
   scorecard of the 2025 final reconciles with the batch scorecard, even after a SIGKILL mid-match
   and a full duplicate replay.
-* **Live results.** A scheduled GitHub Actions job refreshes the lake from Cricsheet twice a
-  week and publishes **[rohit91jacob.github.io/ipl-streaming-lakehouse](https://rohit91jacob.github.io/ipl-streaming-lakehouse/)**:
+* **Live results.** A scheduled GitHub Actions job refreshes the lake from Cricsheet every
+  day and publishes **[rohit91jacob.github.io/ipl-streaming-lakehouse](https://rohit91jacob.github.io/ipl-streaming-lakehouse/)**:
   the latest points table with NRR, Orange and Purple Cap top 10, recent results, all-time
   leaders and champions, plus a page per season. No credentials are involved.
 
@@ -273,7 +273,7 @@ Three workflows run in GitHub Actions. All actions are pinned by SHA.
 | Workflow | Trigger | What it does |
 |---|---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | every push and PR | The jobs below |
-| [`refresh.yml`](.github/workflows/refresh.yml) | Mondays and Thursdays 05:00 UTC, or **Run workflow** | Restores the cached lake, runs `ipl batch` against live Cricsheet (data-quality gates fail the run), saves the lake, builds the site with `ipl report` and deploys it to GitHub Pages. A failed scheduled run opens or updates a `Scheduled refresh is failing` issue. |
+| [`refresh.yml`](.github/workflows/refresh.yml) | Daily 05:00 UTC, or **Run workflow** | Restores the cached lake, runs `ipl batch` against live Cricsheet (data-quality gates fail the run), saves the lake, builds the site with `ipl report` and deploys it to GitHub Pages. A failed scheduled run opens or updates a `Scheduled refresh is failing` issue. |
 | [`keepalive.yml`](.github/workflows/keepalive.yml) | 1st and 15th of each month | Re-enables the scheduled workflows through the API so GitHub's 60-day inactivity rule never switches them off. It makes no commits. |
 
 `ci.yml` jobs:
@@ -291,8 +291,9 @@ the repository current and clean.
 
 ## Operations
 
-* **Scheduling and freshness.** `refresh.yml` runs `ipl batch` on GitHub Actions every Monday
-  and Thursday and republishes the results site. The site header shows the date of the latest
+* **Scheduling and freshness.** `refresh.yml` runs `ipl batch` on GitHub Actions daily at
+  05:00 UTC and republishes the results site. On days with no new matches the download is a
+  "not modified" no-op. The site header shows the date of the latest
   match in the data and when it was generated; `summary.json` has the same metadata for
   monitoring. Elsewhere, run `ipl batch` from cron, Airflow, Dagster or a k8s CronJob (the exit
   code is the contract). `ipl stream` is a long-running service; compose restarts it

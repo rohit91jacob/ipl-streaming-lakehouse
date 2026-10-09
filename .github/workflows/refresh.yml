@@ -6,9 +6,10 @@ name: refresh
 
 on:
   schedule:
-    # Twice a week. Cricsheet adds matches within days of play, and two runs a week keep the
-    # cached lake inside the Actions cache's 7-day eviction window.
-    - cron: "0 5 * * 1,4"
+    # Daily. Cricsheet adds matches within a day or two of play; on days with nothing new the
+    # conditional download returns "not modified" and the run only rebuilds gold and the site
+    # (about 2 minutes). Daily runs also keep the cached lake well inside the 7-day eviction window.
+    - cron: "0 5 * * *"
   workflow_dispatch:
     inputs:
       full_refresh:
