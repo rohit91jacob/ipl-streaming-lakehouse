@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # One image for every role (batch, stream, producer, dashboard); the command picks the role.
-FROM python:3.12-slim-trixie
+FROM python:3.14-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
