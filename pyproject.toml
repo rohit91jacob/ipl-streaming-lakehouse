@@ -43,7 +43,7 @@ Data = "https://cricsheet.org/"
 dev = [
   "pytest>=9,<10",
   "pytest-cov>=7,<8",
-  "ruff>=0.16,<0.17",
+  "ruff>=0.16,<0.18",
   "pre-commit>=4,<5",
 ]
 
