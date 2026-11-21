@@ -22,6 +22,10 @@ updates:
     directory: /docker
     schedule:
       interval: weekly
+    ignore:
+      # Python 3.13+ base images: the pinned libraries are not on 3.13+ yet; take 3.12 patches only
+      - dependency-name: python
+        versions: [">=3.13"]
   - package-ecosystem: docker-compose
     directory: /
     schedule:
