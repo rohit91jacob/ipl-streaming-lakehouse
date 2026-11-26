@@ -102,7 +102,7 @@ services:
     restart: unless-stopped
 
   kafka-ui:
-    image: kafbat/kafka-ui:v1.5.0
+    image: kafbat/kafka-ui:v1.5.1
     profiles: ["ui"]
     depends_on:
       kafka:
